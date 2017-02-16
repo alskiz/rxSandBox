@@ -63,19 +63,12 @@ public class MainActivity extends AppCompatActivity {
                         .replay(1)
                         .refCount();
 
-        Log.e(TAG2, "--- vvv ---");
-        socketConnection.
-                flatMap(socket -> Observable.range(1, 3).map(state -> " state = [" + state + "]" + " socket = [" + socket + "]"))
-                .doOnUnsubscribe(() -> Log.e(TAG2, "Unsubscribed"))
-                .doOnSubscribe(() -> Log.e(TAG2, "Subscribed"))
-                .subscribe(new DebugSubscriber<>(TAG2));
 
-        Log.e(TAG2, "--- ^^^ ---");
 
         Log.e(TAG1, "--- vvv ---");
         final int[] errorCounter = {0};
         socketConnection.
-                flatMap(socket -> Observable.range(1, 3).flatMap(state -> {
+                flatMap(socket -> Observable.range(1, 3).delay(0, TimeUnit.MILLISECONDS).flatMap(state -> {
 
                     String value = " state = [" + state + "]" + " socket = [" + socket + "]";
 
@@ -107,6 +100,16 @@ public class MainActivity extends AppCompatActivity {
                 }))
                 .subscribe(new DebugSubscriber<>(TAG1));
         Log.e(TAG1, "--- ^^^ ---");
+
+        Log.e(TAG2, "--- vvv ---");
+        socketConnection
+                .delay(0, TimeUnit.MILLISECONDS)
+                .flatMap(socket -> Observable.range(1, 3).map(state -> " state = [" + state + "]" + " socket = [" + socket + "]"))
+                .doOnUnsubscribe(() -> Log.e(TAG2, "Unsubscribed"))
+                .doOnSubscribe(() -> Log.e(TAG2, "Subscribed"))
+                .subscribe(new DebugSubscriber<>(TAG2));
+
+        Log.e(TAG2, "--- ^^^ ---");
 
     }
 
