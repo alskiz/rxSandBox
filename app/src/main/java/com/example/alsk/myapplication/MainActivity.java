@@ -1,7 +1,6 @@
 package com.example.alsk.myapplication;
 
 import android.os.Bundle;
-import android.support.v4.util.Pair;
 import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 
@@ -9,6 +8,8 @@ import java.util.concurrent.TimeUnit;
 
 import rx.Observable;
 import rx.Subscriber;
+import rx.android.schedulers.AndroidSchedulers;
+import rx.observables.SyncOnSubscribe;
 import rx.subjects.PublishSubject;
 
 public class MainActivity extends AppCompatActivity {
@@ -17,6 +18,7 @@ public class MainActivity extends AppCompatActivity {
     public static final String TAGS = "Socket";
     public static final String TAG2 = "SECOND";
     public static final String TAG1 = "FIRST";
+    public static final String INJECTOR = "INJECTOR";
 
     private Integer socketState = 1;
 
@@ -27,41 +29,50 @@ public class MainActivity extends AppCompatActivity {
         test1();
     }
 
-    private void test2() {
-
-        final int[] counter = {0};
-        Observable.create(s -> {
-            System.out.println("subscribing");
-            counter[0]++;
-            s.onError(new RuntimeException("always fails " + counter[0]));
-        }).retryWhen(attempts -> {
-            return attempts
-                    .zipWith(Observable.range(1, 3), Pair::new)
-                    .flatMap(pair -> {
-                        Log.e(TAG, "flatMap " + pair.first + " " + pair.second);
-
-                        int i = pair.second;
-                        System.out.println("delay retry by " + i + " second(s)");
-                        return Observable.timer(i, TimeUnit.SECONDS);
-                    });
-        }).toBlocking().forEach(System.out::println);
-    }
-
     private void test1() {
 
-        PublishSubject<Object> injector = PublishSubject.create();
+        final PublishSubject<Object> injector = PublishSubject.create();
+
 
         Observable<Integer> socketConnection =
-                Observable.defer(() -> Observable.just(socketState))
+                Observable.create(SyncOnSubscribe.<Integer>createStateless(
+                        observer -> {
+                            observer.onNext(socketState);
+                            observer.onCompleted();
+                            socketState++;
+                        }))
                         .doOnUnsubscribe(() -> Log.e(TAGS, "Unsubscribed"))
                         .doOnSubscribe(() -> Log.e(TAGS, "Subscribed"))
                         .doOnCompleted(() -> Log.e(TAGS, "Complete"))
                         .doOnError(error -> Log.e(TAGS, "Error " + error.getMessage()))
                         .doOnNext(string -> Log.e(TAGS, "Next " + string))
-                        .repeatWhen(notifications -> injector)
+                        .repeatWhen(notifications -> notifications.flatMap(notification -> {
+
+                            if (injector.hasObservers()) {
+                                Log.e(TAG, "returned injector EMPTY");
+                                return Observable.empty();
+                            } else {
+                                Log.e(TAG, "returned injector = [" + injector + "]");
+                                return injector
+                                        .doOnNext(o -> Log.e(INJECTOR, "doOnNext" + " o = [" + o + "]"))
+                                        .doOnError(e -> Log.e(INJECTOR, "doOnError" + " e = [" + e + "]"))
+                                        .doOnUnsubscribe(() -> Log.e(INJECTOR, "Unsubscribed"))
+                                        .doOnSubscribe(() -> Log.e(INJECTOR, "Subscribed"));
+                            }
+                        }))
                         .replay(1)
                         .refCount();
 
+        Log.e(TAG2, "--- vvv ---");
+        socketConnection.
+                flatMap(socket -> Observable.range(1, 3).map(state -> " state = [" + state + "]" + " socket = [" + socket + "]"))
+                .doOnUnsubscribe(() -> Log.e(TAG2, "Unsubscribed"))
+                .doOnSubscribe(() -> Log.e(TAG2, "Subscribed"))
+                .subscribe(new DebugSubscriber<>(TAG2));
+
+        Log.e(TAG2, "--- ^^^ ---");
+
+        Log.e(TAG1, "--- vvv ---");
         final int[] errorCounter = {0};
         socketConnection.
                 flatMap(socket -> Observable.range(1, 3).flatMap(state -> {
@@ -77,31 +88,26 @@ public class MainActivity extends AppCompatActivity {
                 }))
                 .doOnUnsubscribe(() -> Log.e(TAG1, "Unsubscribed"))
                 .doOnSubscribe(() -> Log.e(TAG1, "Subscribed"))
-                .retryWhen(errors -> {
-                    return errors.flatMap(error -> {
-                        Log.e(TAG1, "error = [" + error + "]");
+                .doOnError(error -> Log.e(TAG1, "Error going through [" + error + "]"))
+                .retryWhen(errors -> errors.flatMap(error -> {
 
-                        errorCounter[0]++;
-                        if (errorCounter[0] > 3) {
-                            return Observable.<Long>error(new RuntimeException("Uncorrectable error"));
-                        }
+                    errorCounter[0]++;
+                    Log.e(TAG1, "error = [" + error + "]" + " errorCounter[0] = [" + errorCounter[0] + "]");
+                    if (errorCounter[0] == 4) {
+                        return Observable.<Long>error(new RuntimeException("Unrecoverable error"));
+                    }
 
-                        return Observable.just(0)
-                                .delay(1, TimeUnit.MICROSECONDS)
-                                .doOnNext(o -> {
-                                    socketState++;
-                                    Log.e(TAG1, "Injected");
-                                    injector.onNext(o);
-                                });
-                    });
-                })
+                    return Observable.just(errorCounter[0])
+                            .delay(3000, TimeUnit.MILLISECONDS)
+                            .observeOn(AndroidSchedulers.mainThread())
+                            .doOnNext(o -> {
+                                Log.e(TAG1, "--------- Injected -----------" + " o = [" + o + "]");
+                                injector.onNext(o);
+                            });
+                }))
                 .subscribe(new DebugSubscriber<>(TAG1));
+        Log.e(TAG1, "--- ^^^ ---");
 
-        socketConnection.
-                flatMap(socket -> Observable.range(1, 3).map(state -> " state = [" + state + "]" + " socket = [" + socket + "]"))
-                .doOnUnsubscribe(() -> Log.e(TAG2, "Unsubscribed"))
-                .doOnSubscribe(() -> Log.e(TAG2, "Subscribed"))
-                .subscribe(new DebugSubscriber<>(TAG2));
     }
 
     private void sleep(int millis) {
@@ -127,12 +133,12 @@ public class MainActivity extends AppCompatActivity {
 
         @Override
         public void onError(Throwable e) {
-            Log.e(TAG, "onError() called with: e = [" + e + "]");
+            Log.e(TAG, "onError() [" + e + "]");
         }
 
         @Override
         public void onNext(T t) {
-            Log.e(TAG, "onNext() called with: t = [" + t + "]");
+            Log.e(TAG, "onNext() [" + t + "]");
         }
     }
 }
