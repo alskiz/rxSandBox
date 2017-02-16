@@ -86,8 +86,8 @@ public class MainActivity extends AppCompatActivity {
                             return Observable.<Long>error(new RuntimeException("Uncorrectable error"));
                         }
 
-                        return\Observable.just(0)
-                                //.delay(3000, TimeUnit.MILLISECONDS)
+                        return Observable.just(0)
+                                .delay(1, TimeUnit.MICROSECONDS)
                                 .doOnNext(o -> {
                                     socketState++;
                                     Log.e(TAG1, "Injected");
